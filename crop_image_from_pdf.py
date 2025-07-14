@@ -62,7 +62,7 @@ def ocr_with_tesseract(image_region):
 
 
 # ---------------- MAIN LOOP -------------------
-for i in range(182, 186):
+for i in range(5, 186):
     in_path = os.path.join(input_dir, f'page_{i}.png')
     out_path = os.path.join(output_dir, f'cropped_page_{i}.png')
 

@@ -1450,7 +1450,7 @@ def main1():
     output_dir = "image_final_test"
     os.makedirs(output_dir, exist_ok=True)
     save = 0
-    for i in range(2, 183):
+    for i in range(3, 183):
         if i == 173:
             continue
         filename = f"cropped_page_{i}.png"

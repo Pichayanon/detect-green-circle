@@ -1,7 +1,7 @@
 from pdf2image import convert_from_path
 import os
 pdf_path = 'pdf/Berkshire.pdf'
-output_dir = 'pdf_images'
+output_dir = 'pdf_pages'
 
 
 os.makedirs(output_dir, exist_ok=True)

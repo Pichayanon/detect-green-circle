@@ -1,0 +1,49 @@
+# macOS
+.DS_Store
+
+# PyCharm / JetBrains IDE
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# VSCode (ถ้าใช้)
+.vscode/
+
+# virtual environment
+env/
+venv/
+ENV/
+.venv/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# System files
+Thumbs.db
+Desktop.ini
+
+# Logs and temp
+*.log
+*.tmp
+*.swp
+
+# Output images / results
+*.png
+*.jpg
+*.jpeg
+output/
+debug/
+debug_symbols/
+debug_test/
+image_final_test/
+pdf_images/
+pdf_pages/

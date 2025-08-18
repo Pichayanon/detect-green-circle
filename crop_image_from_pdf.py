@@ -1,5 +1,6 @@
 import cv2
 import os
+import re
 import warnings
 import numpy as np
 import pytesseract
@@ -7,9 +8,9 @@ from pytesseract import Output
 
 warnings.filterwarnings("ignore", message=".*pin_memory.*not supported on MPS.*")
 
-input_dir = 'pdf_pages'
-output_dir = 'pdf_images'
-debug_dir = 'debug_symbols'
+input_dir = 'pdf_pages_VanEck'
+output_dir = 'pdf_images_VanEck'
+debug_dir = 'debug_symbols_VanEck'
 
 os.makedirs(output_dir, exist_ok=True)
 os.makedirs(debug_dir, exist_ok=True)
@@ -62,7 +63,7 @@ def ocr_with_tesseract(image_region):
 
 
 # ---------------- MAIN LOOP -------------------
-for i in range(5, 186):
+for i in range(2, 350):
     in_path = os.path.join(input_dir, f'page_{i}.png')
     out_path = os.path.join(output_dir, f'cropped_page_{i}.png')
 
@@ -124,7 +125,7 @@ for i in range(5, 186):
     # text_easy, conf_easy = ocr_with_easyocr(text_region)
     text_tess, conf_tess = ocr_with_tesseract(text_region)
 
-    text_tess = text_tess.replace('l', 'I')
+    text_tess =  re.sub(r'\bl', 'I', text_tess)
     if text_tess.endswith("US") and not text_tess.endswith(" US"):
         if len(text_tess) > 2:
             text_tess = text_tess[:-2].strip() + " US"

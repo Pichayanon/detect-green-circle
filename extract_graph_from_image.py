@@ -41,27 +41,21 @@ def find_x_axis(lines, img_width):
     x_axis = None
 
     if lines is not None:
-        min_length = img_width * 0.5
-        max_length = img_width * 0.9
+        min_length = img_width * 0.65
+        max_length = img_width * 0.85
         for line in lines:
             x1, y1, x2, y2 = line[0]
             dx, dy = abs(x2 - x1), abs(y2 - y1)
             length = np.sqrt(dx ** 2 + dy ** 2)
             angle = np.degrees(np.arctan2(dy, dx))
             if angle < 10 or angle > 170:
-                horizontal.append((length, (x1, y1, x2, y2)))
+                if min_length < length < max_length:
+                    horizontal.append((length, (x1, y1, x2, y2)))
         if not horizontal:
             return x_axis
 
         horizontal = sorted(horizontal, reverse=True)
-        if len(horizontal) > 1:
-            length_horizontal = horizontal[1][0]
-            if min_length < length_horizontal < max_length:
-                x_axis = horizontal[1][1]
-        else:
-            length_horizontal = horizontal[1][0]
-            if min_length < length_horizontal < max_length:
-                x_axis = horizontal[1][1]
+        x_axis = horizontal[0][1]
     return x_axis
 
 
@@ -76,19 +70,74 @@ def find_y_axis(lines, x_axis):
             length = np.sqrt(dx ** 2 + dy ** 2)
             angle = np.degrees(np.arctan2(dy, dx))
 
-            if 80 < angle < 100:
+            if 85 < angle < 95:
                 vertical.append((length, (x1, y1, x2, y2)))
             vertical = sorted(vertical, reverse=True)
 
             vertical_left = []
             if len(vertical) > 0:
                 x_axis_left = x_axis[0]
+                y_x_axis = max(x_axis[1], x_axis[3])
                 for length, (x1, y1, x2, y2) in vertical:
                     if max(x1, x2) < x_axis_left + 10:
-                        vertical_left.append((length, (x1, y1, x2, y2)))
+                        if max(y1, y2) < y_x_axis + 5:
+                            vertical_left.append((length, (x1, y1, x2, y2)))
             if vertical_left:
                 y_axis = max(vertical_left, key=lambda t: t[0])[1]
     return y_axis
+
+
+def detect_axes_with_fallback(hsv_image, cropped_image, filename):
+    threshold_candidates = [
+        (np.array([0, 0, 150]), np.array([180, 50, 255])),
+        (np.array([0, 0, 200]), np.array([180, 50, 255])),
+        (np.array([0, 0, 125]), np.array([180, 50, 255])),
+        (np.array([0, 0, 100]), np.array([180, 50, 255])),
+        (np.array([0, 0, 175]), np.array([180, 50, 255])),
+        (np.array([0, 0, 75]), np.array([180, 50, 255])),
+        (np.array([0, 0, 50]), np.array([180, 50, 255])),
+    ]
+
+    for lower_white, upper_white in threshold_candidates:
+        mask_white_image = cv2.inRange(hsv_image, lower_white, upper_white)
+
+
+        kernel_line = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        enhanced_mask_white_image = cv2.dilate(mask_white_image, kernel_line, iterations=1)
+        enhanced_mask_white_image = cv2.morphologyEx(enhanced_mask_white_image, cv2.MORPH_CLOSE, kernel_line)
+
+        kernel_line_2 = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 10))
+        enhanced_mask_white_image_2 = cv2.dilate(mask_white_image, kernel_line_2, iterations=1)
+        enhanced_mask_white_image_2 = cv2.morphologyEx(enhanced_mask_white_image_2, cv2.MORPH_CLOSE, kernel_line)
+
+        base_lines = detect_lines(mask_white_image)
+        enhanced_lines = detect_lines(enhanced_mask_white_image)
+        enhanced_lines_2 = detect_lines(enhanced_mask_white_image_2)
+
+        x_axis = find_x_axis(base_lines, cropped_image.shape[1])
+        if x_axis is None:
+            x_axis = find_x_axis(enhanced_lines, cropped_image.shape[1])
+        if x_axis is None:
+            continue
+        img = cropped_image.copy()
+        cv2.line(img, (x_axis[0], x_axis[1]), (x_axis[2], x_axis[3]), (0, 0, 255), 5)
+        cv2.imwrite(f"debug_axis/axis_test_{lower_white}_{upper_white}.png", img)
+
+        y_axis = find_y_axis(base_lines, x_axis)
+        if y_axis is None:
+            y_axis = find_y_axis(enhanced_lines, x_axis)
+        if y_axis is None:
+            y_axis = find_y_axis(enhanced_lines_2, x_axis)
+        if y_axis is None:
+            continue
+
+        cv2.line(cropped_image, (x_axis[0], x_axis[1]), (x_axis[2], x_axis[3]), (0, 0, 255), 5)
+        cv2.line(cropped_image, (y_axis[0], y_axis[1]), (y_axis[2], y_axis[3]), (0, 255, 0), 5)
+        cv2.imwrite(f"debug_axis/axis_test.png", cropped_image)
+
+        return mask_white_image, enhanced_mask_white_image, x_axis, y_axis
+
+    return None, None, None, None
 
 
 # ------------------- Find x minor ticks -------------------
@@ -197,6 +246,8 @@ def is_year_x_label_valid_range(gaps):
         return True
     if all((g != 1 if i % 2 == 0 else g == 1) for i, g in enumerate(gaps)):
         return True
+    if (gaps[0] == 2 and all((g == 4 if i % 2 == 1 else g == 1) for i, g in enumerate(gaps[1:], start=1))):
+        return True
     return False
 
 
@@ -207,22 +258,33 @@ def year_label_gaps(labels):
     return [years[i + 1] - years[i] for i in range(len(years) - 1)]
 
 
-def detect_labels_on_x_axis_pytesseract(image, strip_parm, x_axis_left, x_axis_right):
+def detect_labels_on_x_axis_pytesseract(image, strip_parm, x_axis_left, x_axis_right, count_minor):
     labels, label_x = [], []
     day = False
     for top, bot in strip_parm:
-        label_strip = image[top:bot, min(x_axis_left, x_axis_right):max(x_axis_left, x_axis_right)]
+        label_strip = image[top:bot, min(x_axis_left+10, x_axis_right):max(x_axis_left, x_axis_right+10)]
         label_strip_gray = cv2.cvtColor(label_strip, cv2.COLOR_BGR2GRAY)
         ocr_result = ocr_with_pytesseract(label_strip_gray)
         labels_temp, label_x_temp = [], []
         for i, text in enumerate(ocr_result['text']):
-            if text.strip().isdigit() and int(ocr_result['conf'][i]) > 60:
+            label = text.strip()
+
+            if label.isdigit() and int(ocr_result['conf'][i]) > 55:
+                if len(label) == 3 and label.endswith(('15', '16', '17', '18', '19', '20', '21', '22',
+                                                       '23', '24', '25', '26', '27', '28', '29', '30')):
+                    label = '20' + label[-2:]
                 left = ocr_result['left'][i] - 30
                 width = ocr_result['width'][i] + 10
                 center_x = left + width // 2
-                labels_temp.append(text)
-                label_x_temp.append(center_x)
+                if len(label) <= 4:
+                    labels_temp.append(label)
+                    label_x_temp.append(center_x)
+
+        cv2.imwrite(f"debug_test/x_ocr_py_{bot}_{top}.png", label_strip)
+
         if labels_temp and not (is_year_x_label_valid_range(year_label_gaps(labels_temp))):
+            continue
+        if 4 <= len(labels_temp) < (count_minor // 4) - 1:
             continue
         if labels_temp and any(len(label) == 2 for label in labels_temp):
             day = False
@@ -232,30 +294,38 @@ def detect_labels_on_x_axis_pytesseract(image, strip_parm, x_axis_left, x_axis_r
     return [], [], day, None
 
 
-def detect_labels_on_x_axis_easyocr(image, strip_parm, x_axis_left, x_axis_right, reader):
+def detect_labels_on_x_axis_easyocr(image, strip_parm, x_axis_left, x_axis_right, reader, count_minor):
     labels, label_x = [], []
     day = False
-    for top, bot in strip_parm:
-        label_strip = image[top:bot, min(x_axis_left, x_axis_right):max(x_axis_left, x_axis_right)]
-        easy_labels = ocr_with_easyocr(reader, label_strip)
-        easy_label_vals, easy_label_x = zip(*easy_labels) if easy_labels else ([], [])
-        if easy_labels and not (is_year_x_label_valid_range(year_label_gaps(list(easy_label_vals)))):
-            continue
-        if easy_labels and any(len(label) == 2 for label in easy_label_vals):
-            day = False
-            continue
-        if easy_labels:
-            return list(easy_label_vals), list(easy_label_x), day, (top, bot)
+    padding = [10, 20, 0, 25]
+    for pad in padding:
+        before_label = None, None
+        for top, bot in strip_parm:
+            label_strip = image[top:bot, min(x_axis_left-pad, x_axis_right):max(x_axis_left, x_axis_right+pad)]
+            easy_labels = ocr_with_easyocr(reader, label_strip)
+            easy_label_vals, easy_label_x = zip(*easy_labels) if easy_labels else ([], [])
+            if easy_labels and not (is_year_x_label_valid_range(year_label_gaps(list(easy_label_vals)))):
+                continue
+            if easy_labels and any(len(label) == 2 for label in easy_label_vals):
+                day = False
+                continue
+            if 4 <= len(list(easy_label_vals)) < (count_minor // 4) - 1:
+                continue
+            if easy_labels:
+                if before_label == easy_label_vals:
+                    return list(easy_label_vals), list(easy_label_x), day, (top, bot)
+                else:
+                    before_label = easy_label_vals
     return [], [], day, None
 
 
-def detect_labels_on_x_axis(image, strip_parm, x_axis_left, x_axis_right, reader):
+def detect_labels_on_x_axis(image, strip_parm, x_axis_left, x_axis_right, reader, count_minor):
     labels, label_x, day, rng = detect_labels_on_x_axis_pytesseract(
-        image, strip_parm, x_axis_left, x_axis_right)
+        image, strip_parm, x_axis_left, x_axis_right, count_minor)
     easy_labels, easy_label_x, easy_day, easy_rng = None, None, None, None
     if len(labels) <= 3:
         easy_labels, easy_label_x, easy_day, easy_rng = detect_labels_on_x_axis_easyocr(
-            image, strip_parm, x_axis_left, x_axis_right, reader)
+            image, strip_parm, x_axis_left, x_axis_right, reader, count_minor)
         if len(labels) < len(easy_labels):
             labels, label_x, day, rng = easy_labels, easy_label_x, easy_day, easy_rng
     return labels, label_x, day, rng
@@ -367,23 +437,22 @@ def find_x_major_ticks(image, strip_heights_parm, x_axis_left, x_axis_right, x_a
     if len(months) > 0:
         offset_list = [80, 75, 70, 65]
     else:
-        offset_list = [75]
+        offset_list = [25, 15]
 
     for strip_height_major in strip_heights_parm:
         for y_offset in offset_list:
             y_base_major = (x_axis_top + x_axis_bot) / 2
             y_base_major = int(y_base_major)
-            if len(months) > 0:
-                y_strip_top_major = y_base_major + y_offset
-            else:
-                y_strip_top_major = y_base_major + 25
+            y_strip_top_major = y_base_major + y_offset
+
 
             y_strip_bot_major = y_strip_top_major + strip_height_major
             strip_img = image[
                         max(y_strip_top_major, 0):min(y_strip_bot_major, image.shape[0]),
                         max(0, min(x_axis_left, x_axis_right) - pad_left):min(image.shape[1], max(x_axis_left,  x_axis_right) + pad_right)
                         ]
-            cv2.imwrite(f"/Users/pichayanon/extract_graph/final_version_update/debug_test/axis_{strip_height_major}.png", strip_img)
+            cv2.imwrite(f"debug_test/axis_{strip_height_major}.png", strip_img)
+            cv2.imwrite(f"debug_test/axis_{strip_height_major}_i.png", image)
             col_proj = np.sum(strip_img, axis=0)
             col_proj = (col_proj - col_proj.min()) / (col_proj.max() - col_proj.min() + 1e-6)
             peaks_major, _ = find_peaks(col_proj, height=0.4, distance=25)
@@ -585,7 +654,6 @@ def map_labels_to_minor_ticks_single_year_with_quarter(mapping, tick_coords_sort
 
 
 def map_labels_to_minor_ticks_range_5_year_with_quarter(mapping, tick_coords_sorted, y_strip):
-    print("Case 4 Year")
     label_results = []
     mapping = compress_x_minor_tick(mapping)
 
@@ -696,7 +764,6 @@ def map_labels_to_minor_ticks_range_10_year_with_quarter(mapping, tick_coords_so
     label_results = []
     mapping = compress_x_minor_tick(mapping)
 
-    print("Case 10 Year")
     if len(mapping) > 1:
         first_major_tick_x = mapping[0]['between_tick'][0]
         first_year = int(mapping[0]['text'])
@@ -813,14 +880,16 @@ def map_labels_to_minor_ticks_range_10_year_with_quarter(mapping, tick_coords_so
 
 
 def map_labels_to_minor_ticks_range_months(mapping, tick_coords_sorted, y_strip, output=None):
-    print("Case Month")
     if not mapping:
         return []
 
     label_results = []
 
     start_year = int(mapping[0]['text'])
+    end_year = int(mapping[-1]['text'])
+
     tick_start, tick_end = mapping[0]['between_tick']
+
 
     segment_ticks = [tx for (tx, ty) in tick_coords_sorted if tick_start <= tx <= tick_end]
     segment_ticks = sorted(segment_ticks)
@@ -835,9 +904,10 @@ def map_labels_to_minor_ticks_range_months(mapping, tick_coords_sorted, y_strip,
     ticks_after_segment = [tx for (tx, ty) in tick_coords_sorted if tx > tick_end]
     ticks_after_segment = sorted(ticks_after_segment)
 
+
     for i, tx in enumerate(reversed(ticks_before_segment), 1):
         month = 12 - (i - 1)
-        year = start_year
+        year = start_year - 1
         while month <= 0:
             month += 12
             year -= 1
@@ -847,9 +917,9 @@ def map_labels_to_minor_ticks_range_months(mapping, tick_coords_sorted, y_strip,
     for i, tx in enumerate(segment_ticks):
         month = i + 1
         if month <= 12:
-            year = start_year + 1
+            year = start_year
         else:
-            year = start_year + 1 + (month - 1) // 12
+            year = start_year + (month - 1) // 12
         month_in_year = (month - 1) % 12 + 1
         label = f"{year}.{month_in_year:02d}"
         label_results.append({'tick_pos': (tx, y_strip), 'label': label, 'is_quarter': False})
@@ -857,7 +927,7 @@ def map_labels_to_minor_ticks_range_months(mapping, tick_coords_sorted, y_strip,
     base_index = len(segment_ticks)
     for i, tx in enumerate(ticks_after_segment, 1):
         month = base_index + i
-        year = start_year + 1 + (month - 1) // 12
+        year = start_year + (month - 1) // 12
         month_in_year = (month - 1) % 12 + 1
         label = f"{year}.{month_in_year:02d}"
         label_results.append({'tick_pos': (tx, y_strip), 'label': label, 'is_quarter': False})
@@ -960,6 +1030,7 @@ def format_y_label_value(val):
     else:
         return str(int(val)) if val == int(val) else str(val)
 
+
 def correct_misread_labels(y_labels):
     for i, tick in enumerate(y_labels):
         label = tick['label']
@@ -995,9 +1066,11 @@ def ocr_y_white_label(y_axis_left, y_axis_right, y_axis_top, y_axis_bot, img_cro
         x_strip = int((y_axis_left + y_axis_right) / 2) - shift_left
         ocr_attempts = [(x_strip - 110, x_strip - 20), (x_strip - 110, x_strip - 15), (x_strip - 110, x_strip - 10), (x_strip - 110, x_strip - 5),
                         (x_strip - 120, x_strip - 20), (x_strip - 120, x_strip - 15), (x_strip - 120, x_strip - 10), (x_strip - 120, x_strip - 5),
+                        (x_strip - 120, x_strip - 4), (x_strip - 120, x_strip - 3), (x_strip - 120, x_strip - 2), (x_strip - 120, x_strip - 1),
                         (x_strip - 130, x_strip - 20), (x_strip - 130, x_strip - 15), (x_strip - 130, x_strip - 10), (x_strip - 130, x_strip - 5),
                         (x_strip - 140, x_strip - 20), (x_strip - 140, x_strip - 15), (x_strip - 140, x_strip - 10), (x_strip - 140, x_strip - 5),
-                        (x_strip - 150, x_strip - 20), (x_strip - 150, x_strip - 15), (x_strip - 150, x_strip - 10), (x_strip - 150, x_strip - 5)]
+                        (x_strip - 150, x_strip - 20), (x_strip - 150, x_strip - 15), (x_strip - 150, x_strip - 10), (x_strip - 150, x_strip - 5),
+                        (x_strip - 100, x_strip - 20), (x_strip - 100, x_strip - 15), (x_strip - 100, x_strip - 10), (x_strip - 100, x_strip - 5)]
         valid_suffix = ('M', 'm', 'B', 'b', 'K', 'k', '8', '0')
         ocr_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.MBkK'
         for attempt_idx, (x_left, x_right) in enumerate(ocr_attempts):
@@ -1005,8 +1078,7 @@ def ocr_y_white_label(y_axis_left, y_axis_right, y_axis_top, y_axis_bot, img_cro
                       max(0, min(y_axis_top, y_axis_bot) - pad_top):min(img_cropped.shape[0], max(y_axis_top, y_axis_bot) + pad_bottom),
                       max(0, x_left):min(img_cropped.shape[1], x_right)
                       ]
-
-            cv2.imwrite(f"/Users/pichayanon/extract_graph/final_version_update/debug_test/ocr_y_{attempt_idx}.png",ocr_roi)
+            cv2.imwrite(f"debug_test/ocr_y_{attempt_idx}.png", ocr_roi)
             ocr_result_y = pytesseract.image_to_data(
                 ocr_roi,
                 output_type=pytesseract.Output.DICT,
@@ -1028,10 +1100,14 @@ def ocr_y_white_label(y_axis_left, y_axis_right, y_axis_top, y_axis_bot, img_cro
             y_labels = correct_misread_labels(y_labels)
             non_empty_labels = [label for label in y_labels if label['label'].strip() != '']
             label_texts = [label['label'] for label in non_empty_labels]
-
             label_with_values = []
             invalid_values = False
             for lbl in non_empty_labels:
+                for i in range(len(non_empty_labels)):
+                    label = non_empty_labels[i]['label']
+                    if label == 'B':
+                        if i == len(non_empty_labels) - 1:
+                            non_empty_labels[i]['label'] = '0'
                 val = parse_y_label_value(lbl['label'])
                 if val is None:
                     invalid_values = True
@@ -1090,7 +1166,7 @@ def ocr_y_green_label(img_cropped, best_line_y, y_axis_labels):
     img_sharp = cv2.filter2D(img_cropped, -1, sharpen_kernel)
     hsv = cv2.cvtColor(img_sharp, cv2.COLOR_BGR2HSV)
 
-    lower_green = np.array([45, 50, 50])
+    lower_green = np.array([30, 35, 35])
     upper_green = np.array([85, 255, 255])
 
     x_y = int((best_line_y[0] + best_line_y[2]) / 2)
@@ -1098,14 +1174,14 @@ def ocr_y_green_label(img_cropped, best_line_y, y_axis_labels):
     y2_y = max(best_line_y[1], best_line_y[3]) + 10
 
     strip_settings = [
-        (200, 12), (200, 10), (200, 15), (200, 20), (200, 25),
-        (180, 12), (180, 10), (180, 15), (180, 20), (180, 25),
-        (160, 12), (160, 10), (160, 15), (160, 20), (160, 25),
-        (140, 12), (140, 10), (140, 15), (140, 20), (140, 25),
+        (220, 12), (220, 10), (220, 15), (220, 20), (220, 25), (220, 28),
+        (200, 12), (200, 10), (200, 15), (200, 20), (200, 25), (200, 28),
+        (180, 12), (180, 10), (180, 15), (180, 20), (180, 25), (180, 28),
+        (160, 12), (160, 10), (160, 15), (160, 20), (160, 25), (160, 28),
     ]
 
     prev_int_labels = None
-
+    green_result_before = []
     for attempt_idx, (strip_width, pad_right) in enumerate(strip_settings):
         strip_left = max(0, x_y - strip_width)
         strip_right = max(0, x_y - pad_right)
@@ -1123,7 +1199,7 @@ def ocr_y_green_label(img_cropped, best_line_y, y_axis_labels):
                 abs_y = y1_y + y
                 roi = img_cropped[abs_y:abs_y + h, abs_x:abs_x + w]
                 # roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                cv2.imwrite(f"img/debug/green_label_Y.png", roi)
+                cv2.imwrite(f"debug_green_label/green_label_{attempt_idx}.png", roi)
                 text = pytesseract.image_to_string(roi, config='--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.MBkK').strip()
 
                 if text == "." or text == "-":
@@ -1131,8 +1207,6 @@ def ocr_y_green_label(img_cropped, best_line_y, y_axis_labels):
 
                 if text:
                     green_results.append({'y': abs_y + h // 2, 'label': text})
-                    #cv2.rectangle(img_cropped, (abs_x, abs_y), (abs_x + w, abs_y + h), (0, 255, 0), 1)
-                    #cv2.putText(img_cropped, text, (abs_x, abs_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
         if not green_results:
             continue
@@ -1166,21 +1240,22 @@ def ocr_y_green_label(img_cropped, best_line_y, y_axis_labels):
                 prev_int_labels = int_labels
                 continue
         prev_int_labels = int_labels
-
         combined = y_axis_labels + green_results
         combined = [item for item in combined if item['label'].strip() != '']
         combined = sorted(combined, key=lambda x: x['y'])
 
+        if len(combined) > 1 and combined[0]["label"] == "N/A":
+            green_result_before = green_results
         parsed_values = [parse_y_label_value(l['label']) for l in combined]
         if None in parsed_values:
             continue
 
-        if not all(parsed_values[i] > parsed_values[i + 1] for i in range(len(parsed_values) - 1)):
+        if not all(parsed_values[i] >= parsed_values[i + 1] for i in range(len(parsed_values) - 1)) and y_axis_labels[0]['label']:
             continue
 
         return green_results
 
-    return []
+    return green_result_before
 
 
 # ------------------- Map Y and label -------------------
@@ -1299,7 +1374,7 @@ def interpolate_y_label(target_y, mapped_tick_labels, green_labels=None):
                 return green['label']
 
     for y, val, label in valid_ticks:
-        if abs(target_y - y) <= 3:
+        if abs(target_y - y) <= 10:
             return label
 
     valid_ticks.sort(key=lambda t: t[0], reverse=True)
@@ -1426,8 +1501,10 @@ def scan_green_balls_by_x_ticks(hsv_image, mask_output_img, tick_labels, mapped_
         if found:
             if day:
                 y_label = interpolate_y_label(y + 5, mapped_tick_labels, y_green_label)
+                cv2.circle(mask_output_img, (tx - 8, y), 1, (255, 255, 0), 3)
             else:
                 y_label = interpolate_y_label(y + 5, mapped_tick_labels, y_green_label)
+                cv2.circle(mask_output_img, (tx, y), 1, (255, 255, 0), 3)
             print(f"║ {label:<10} │ {y_label:<12} ║")
             last_y_label = y_label
             result_y_label = y_label
@@ -1443,57 +1520,43 @@ def scan_green_balls_by_x_ticks(hsv_image, mask_output_img, tick_labels, mapped_
 
 
 # ------------------- Main -------------------
-def main1():
+def main():
     start_time = time.time()
     reader = easyocr.Reader(['en'])
-    input_dir = "pdf_images"
-    output_dir = "image_final_test"
+    input_dir = "pdf_images_VanEck"
+    output_dir = "image_final_test_VanEck"
     os.makedirs(output_dir, exist_ok=True)
     save = 0
-    for i in range(3, 183):
-        if i == 173:
+    for i in range(2, 108):
+        #if i == 173:
+        if i in [27, 37, 44, 102, 141, 172, 180]:
             continue
+        # if i in [46, 47, 48, 74]:
+        #     continue
+        # if i in [32, 33, 37, 214]:
+        #     continue
+        # if i in [23, 71]:
+        #     continue
+        # if i in [89, 95, 99]:
+        #     continue
         filename = f"cropped_page_{i}.png"
         img_path = os.path.join(input_dir, filename)
         img = cv2.imread(img_path)
         if img is None:
-            print(f"{filename} not found or cannot open.")
             continue
 
         cropped_image = crop_image(img, 25, 25, 50, 50)
         hsv_image = convert_bgr_to_hsv(cropped_image)
-        mask_white_image = mask_white_area(hsv_image, np.array([0, 0, 200]), np.array([180, 50, 255]))
 
-        # ===== Axes =====
-        detected_line = detect_lines(mask_white_image)
-        kernel_line = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        mask_white_image_y_line = cv2.dilate(mask_white_image, kernel_line, iterations=1)
-        mask_white_image_y_line = cv2.morphologyEx(mask_white_image_y_line, cv2.MORPH_CLOSE, kernel_line)
-        detected_blur_line = detect_lines(mask_white_image_y_line)
-
-        x_axis = find_x_axis(detected_line, cropped_image.shape[1])
-        if x_axis is None:
-            x_axis = find_x_axis(detected_blur_line, cropped_image.shape[1])
-
-        y_axis = find_y_axis(detected_blur_line, x_axis)
-        if y_axis is None:
-            y_axis = find_y_axis(detected_line, x_axis)
-
-        if x_axis is None:
-            print(f"{filename} could not detect X axes.")
-            continue
-
-        if y_axis is None:
-            print(f"{filename} could not detect Y axes.")
-            continue
+        mask_white_image, enhanced_mask_white_image, x_axis, y_axis = detect_axes_with_fallback(hsv_image, cropped_image, filename)
 
         x_axis_left, x_axis_top, x_axis_right, x_axis_bot = x_axis
         y_axis_left, y_axis_top, y_axis_right, y_axis_bot = y_axis
 
-        # cv2.line(cropped_image, (x_axis[0], x_axis[1]), (x_axis[2], x_axis[3]), (0, 0, 255), 5)
-        # cv2.line(cropped_image, (y_axis[0], y_axis[1]), (y_axis[2], y_axis[3]), (0, 255, 0), 5)
-        #
-        # cv2.imwrite(f"/Users/pichayanon/extract_graph/final_version_update/debug_axis/axis_{i-1}.png", cropped_image)
+        cv2.line(cropped_image, (x_axis[0], x_axis[1]), (x_axis[2], x_axis[3]), (0, 0, 255), 5)
+        cv2.line(cropped_image, (y_axis[0], y_axis[1]), (y_axis[2], y_axis[3]), (0, 255, 0), 5)
+
+        cv2.imwrite(f"debug_axis/axis_{i}.png", cropped_image)
 
         # ===== X Minor ticks =====
         minor_tick_coords = find_x_minor_ticks(mask_white_image, x_axis_left, x_axis_top, x_axis_right, x_axis_bot)
@@ -1501,13 +1564,7 @@ def main1():
                                                    y_axis_left, y_axis_right)
 
         if minor_tick_coords is None:
-            print(f"{filename} could not detect X minor tick.")
             continue
-
-        # for (tx, ty) in minor_tick_coords:
-        #     cv2.line(cropped_image, (tx, ty - 10), (tx, ty + 10), (255, 100, 0), 2)
-        #
-        # cv2.imwrite(f"/Users/pichayanon/extract_graph/final_version_update/debug_minor/minor_{i-1}.png", cropped_image)
 
         # ===== X labels =====
         strip_ocr_parm = [
@@ -1516,20 +1573,20 @@ def main1():
             (x_axis_top + 50, x_axis_bot + 200)
         ]
         labels, label_x, day, success_range = detect_labels_on_x_axis(
-            cropped_image, strip_ocr_parm, x_axis_left, x_axis_right, reader
+            cropped_image, strip_ocr_parm, x_axis_left, x_axis_right, reader, len(minor_tick_coords)
         )
 
+
         if labels is None:
-            print(f"{filename} could not detect X labels.")
             continue
 
-        # for l, x in zip(labels, label_x):
-        #     cv2.putText(cropped_image, l, (x + 180, x_axis_bot + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 50, 255),2)
-        #
-        # cv2.imwrite(f"/Users/pichayanon/extract_graph/final_version_update/debug_x_label/x_label_{i-1}.png", cropped_image)
+        for l, x in zip(labels, label_x):
+            cv2.putText(cropped_image, l, (x + 180, x_axis_bot + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 50, 255),2)
+
+        cv2.imwrite(f"debug_x_label/x_label_{i}.png", cropped_image)
 
         # ===== X month =====
-        if len(labels) <= 3:
+        if len(labels) <= 4:
             months, months_x = detect_month_labels_on_x_axis(cropped_image, strip_ocr_parm, x_axis_left, x_axis_right,
                                                              reader)
             if len(labels) > 1:
@@ -1540,10 +1597,10 @@ def main1():
         else:
             months = []
 
-        # cv2.imwrite(f"/Users/pichayanon/extract_graph/final_version_update/debug_month/month_{i-1}.png", cropped_image)
+        # cv2.imwrite(f"debug_month/month_{i}.png", cropped_image)
 
         # ===== Major ticks =====
-        strip_x_major_parm = [1, 3, 5, 7, 8, 9, 11, 13, 15, 17, 19, 21]
+        strip_x_major_parm = [1, 3, 5, 7, 8, 9, 11, 12, 13, 15, 17, 19, 21, 23, 25, 27, 100]
         try:
             major_tick_coords, y_x_major_coord = find_x_major_ticks(
                 mask_white_image, strip_x_major_parm,
@@ -1551,13 +1608,47 @@ def main1():
                 minor_tick_coords, labels, label_x, minor_tick_coords, months
             )
         except Exception:
-            print(f"{filename} could not detect major.")
+            major_tick_coords, y_x_major_coord = None, None
+
+        if major_tick_coords is None:
+
+            try:
+                major_tick_coords, y_x_major_coord = find_x_major_ticks(
+                    enhanced_mask_white_image, strip_x_major_parm,
+                    x_axis_left, x_axis_right, x_axis_top, x_axis_bot,
+                    minor_tick_coords, labels, label_x, minor_tick_coords, months
+                )
+            except Exception:
+                major_tick_coords, y_x_major_coord = None, None
+
+        if major_tick_coords is None:
+            threshold_candidates = [
+                (np.array([0, 0, 150]), np.array([180, 50, 255])),
+                (np.array([0, 0, 200]), np.array([180, 50, 255])),
+                (np.array([0, 0, 125]), np.array([180, 50, 255])),
+                (np.array([0, 0, 100]), np.array([180, 50, 255])),
+                (np.array([0, 0, 100]), np.array([180, 50, 255])),
+                (np.array([0, 0, 175]), np.array([180, 50, 255])),
+                (np.array([0, 0, 75]), np.array([180, 50, 255]))
+            ]
+
+            for lower_white, upper_white in threshold_candidates:
+                mask_white_image = cv2.inRange(hsv_image, lower_white, upper_white)
+                try:
+                    major_tick_coords, y_x_major_coord = find_x_major_ticks(
+                        mask_white_image, strip_x_major_parm,
+                        x_axis_left, x_axis_right, x_axis_top, x_axis_bot,
+                        minor_tick_coords, labels, label_x, minor_tick_coords, months
+                    )
+                except Exception:
+                    continue
+        if major_tick_coords is None:
             continue
 
-        # for tx in major_tick_coords:
-        #     cv2.line(cropped_image, (tx, y_x_major_coord - 10), (tx, y_x_major_coord + 10), (0, 250, 255), 3)
-        #
-        # cv2.imwrite(f"/Users/pichayanon/extract_graph/final_version_update/debug_x_major/x_major_{i - 1}.png", cropped_image)
+        for tx in major_tick_coords:
+            cv2.line(cropped_image, (tx, y_x_major_coord - 10), (tx, y_x_major_coord + 10), (0, 250, 255), 3)
+
+        cv2.imwrite(f"debug_x_major/x_major_{i}.png", cropped_image)
 
         mapping = map_labels_to_x_major_ticks(label_x, labels, major_tick_coords, x_axis_left, x_axis_right)
 
@@ -1565,14 +1656,13 @@ def main1():
         tick_coords_sorted = sorted(minor_tick_coords, key=lambda t: t[0])
         y_strip = int((x_axis_top + x_axis_bot) / 2)
 
-        if is_10_year_range(mapping):
-            tick_labels = map_labels_to_minor_ticks_range_10_year_with_quarter(mapping, tick_coords_sorted, y_strip,
-                                                                               cropped_image)
-        elif is_single_year_range(mapping):
+        if is_10_year_range(mapping) and len(months) <= 0:
+            tick_labels = map_labels_to_minor_ticks_range_10_year_with_quarter(mapping, tick_coords_sorted, y_strip,                                                       cropped_image)
+        elif is_single_year_range(mapping) and len(months) <= 0:
             tick_labels = map_labels_to_minor_ticks_range_5_year_with_quarter(mapping, tick_coords_sorted, y_strip)
         elif day:
             tick_labels = map_labels_to_minor_ticks_range_day(mapping, tick_coords_sorted, y_strip, months, months_x)
-        elif len(mapping) == 1:
+        elif len(mapping) == 1 or len(months) != 0:
             tick_labels = map_labels_to_minor_ticks_range_months(mapping, tick_coords_sorted, y_strip, cropped_image)
         else:
             tick_labels = map_labels_to_minor_ticks_single_year_with_quarter(mapping, tick_coords_sorted, y_strip)
@@ -1583,13 +1673,14 @@ def main1():
         y_tick_labels = ocr_y_white_label(y_axis_left, y_axis_right, y_axis_top, y_axis_bot, mask_gray_image)
         if len(y_tick_labels) == 0:
             y_tick_labels = ocr_y_white_label(y_axis_left, y_axis_right, y_axis_top, y_axis_bot, mask_white_image)
-
-        y_green_labels = ocr_y_green_label(cropped_image, y_axis, y_tick_labels)
         mapped_tick_labels = map_ticks_to_labels(y_major_tick_coords, y_tick_labels)
         mapped_tick_labels = auto_fill_missing_tick_label(mapped_tick_labels)
-
-        if len(mapped_tick_labels) <= 1:
+        y_green_labels = ocr_y_green_label(cropped_image, y_axis, mapped_tick_labels)
+        if len(mapped_tick_labels) <= 1 and len(y_green_labels) != 0:
             mapped_tick_labels = y_green_labels
+        if len(y_green_labels) == 1:
+            mapped_tick_labels = y_green_labels
+
         scan_green_balls_by_x_ticks(hsv_image, cropped_image, tick_labels, mapped_tick_labels, x_axis, y_axis,
                                     y_green_labels, day)
         cv2.line(cropped_image, (x_axis[0], x_axis[1]), (x_axis[2], x_axis[3]), (0, 0, 255), 5)
@@ -1601,25 +1692,12 @@ def main1():
         for tx in major_tick_coords:
             cv2.line(cropped_image, (tx, y_x_major_coord - 10), (tx, y_x_major_coord + 10), (0, 250, 255), 3)
 
-        # for (tx, ty) in y_major_tick_coords:
-        #     cv2.line(cropped_image, (0, ty), (cropped_image.shape[1] - 1, ty), (255, 100, 0), 2)
-
-        # for n, tick in enumerate(sorted(tick_labels, key=lambda t: t['tick_pos'][0]), 1):
-        #     tx, ty = tick['tick_pos']
-        #     label = tick['label']
-        #
-        #     if tx > x_axis_right - 5:
-        #         continue
-        #
-        #     if tx < y_axis_left - 5:
-        #         continue
-
         plt.figure(figsize=(14, 7))
-        plt.title(f'Detected All Ticks & Labels (Image {i-1})')
+        plt.title(f'Detected All Ticks & Labels (Image {i})')
         plt.imshow(cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB))
         plt.axis('off')
         plt.tight_layout()
-        out_path = os.path.join(output_dir, f'crop_image_{i-1}.png')
+        out_path = os.path.join(output_dir, f'crop_image_{i}.png')
         plt.savefig(out_path)
         plt.close()
         print(f"Saved: {out_path}")
@@ -1631,4 +1709,4 @@ def main1():
 
 
 if __name__ == "__main__":
-    main1()
+    main()

@@ -15,9 +15,6 @@ debug_dir = 'debug_symbols_VanEck'
 os.makedirs(output_dir, exist_ok=True)
 os.makedirs(debug_dir, exist_ok=True)
 
-#reader = easyocr.Reader(['en'], gpu=True)
-
-
 def ocr_with_easyocr(image_region):
     def get_text_and_conf(results):
         if not results:
@@ -129,8 +126,6 @@ for i in range(2, 350):
     if text_tess.endswith("US") and not text_tess.endswith(" US"):
         if len(text_tess) > 2:
             text_tess = text_tess[:-2].strip() + " US"
-    # if text_tess.startswith("/"):
-    #     text_tess = "7" + text_tess[1:]
 
     print(f"[{i}] Tesseract: {text_tess} (conf: {conf_tess:.3f})")
     print()

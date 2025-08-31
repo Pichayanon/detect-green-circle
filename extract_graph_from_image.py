@@ -284,7 +284,7 @@ def detect_labels_on_x_axis_pytesseract(image, strip_parm, x_axis_left, x_axis_r
 
         if labels_temp and not (is_year_x_label_valid_range(year_label_gaps(labels_temp))):
             continue
-        if 4 <= len(labels_temp) < (count_minor // 4) - 1:
+        if 4 <= len(labels_temp) < (count_minor // 5) - 2:
             continue
         if labels_temp and any(len(label) == 2 for label in labels_temp):
             day = False
@@ -309,7 +309,7 @@ def detect_labels_on_x_axis_easyocr(image, strip_parm, x_axis_left, x_axis_right
             if easy_labels and any(len(label) == 2 for label in easy_label_vals):
                 day = False
                 continue
-            if 4 <= len(list(easy_label_vals)) < (count_minor // 4) - 1:
+            if 4 <= len(list(easy_label_vals)) < (count_minor // 5) - 2:
                 continue
             if easy_labels:
                 if before_label == easy_label_vals:
@@ -1527,7 +1527,7 @@ def main():
     output_dir = "image_final_test_VanEck"
     os.makedirs(output_dir, exist_ok=True)
     save = 0
-    for i in range(2, 108):
+    for i in range(2, 348):
         #if i == 173:
         if i in [27, 37, 44, 102, 141, 172, 180]:
             continue
@@ -1683,6 +1683,7 @@ def main():
 
         scan_green_balls_by_x_ticks(hsv_image, cropped_image, tick_labels, mapped_tick_labels, x_axis, y_axis,
                                     y_green_labels, day)
+
         cv2.line(cropped_image, (x_axis[0], x_axis[1]), (x_axis[2], x_axis[3]), (0, 0, 255), 5)
         cv2.line(cropped_image, (y_axis[0], y_axis[1]), (y_axis[2], y_axis[3]), (0, 255, 0), 5)
 

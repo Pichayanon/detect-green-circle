@@ -1,8 +1,7 @@
 from pdf2image import convert_from_path
 import os
-pdf_path = 'pdf/5.Putnam Large Cap Value Fund (PEYAX_PEIYX).pdf'
+pdf_path = 'pdf/34. Vanguard S&P 500 Growth Index Fund (VOOG).pdf'
 output_dir = 'pdf_pages_VanEck'
-
 
 os.makedirs(output_dir, exist_ok=True)
 

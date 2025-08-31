@@ -1550,6 +1550,9 @@ def main():
 
         mask_white_image, enhanced_mask_white_image, x_axis, y_axis = detect_axes_with_fallback(hsv_image, cropped_image, filename)
 
+        if x_axis is None or y_axis is None:
+            continue
+
         x_axis_left, x_axis_top, x_axis_right, x_axis_bot = x_axis
         y_axis_left, y_axis_top, y_axis_right, y_axis_bot = y_axis
 

@@ -1532,7 +1532,7 @@ def main():
     save = 0
     results = []
     print("Start")
-    for i in range(2, 348):
+    for i in range(2, 60):
         filename = f"cropped_page_{i}.png"
         img_path = os.path.join(input_dir, filename)
         img = cv2.imread(img_path)

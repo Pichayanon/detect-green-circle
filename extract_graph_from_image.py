@@ -1408,7 +1408,6 @@ def interpolate_y_label(target_y, mapped_tick_labels, green_labels=None):
 
 def scan_green_balls_by_x_ticks(hsv_image, mask_output_img, tick_labels, mapped_tick_labels, x_axis, y_axis,
                                 y_green_label, day, green_threshold=12):
-    print("\n===== Scan Green Ball By X Tick =====")
     x_axis_y = int((x_axis[1] + x_axis[3]) / 2)
     y_axis_x = int((y_axis[0] + y_axis[2]) / 2)
     x_axis_xmax = max(x_axis[0], x_axis[2])
@@ -1420,10 +1419,6 @@ def scan_green_balls_by_x_ticks(hsv_image, mask_output_img, tick_labels, mapped_
     mask_green = cv2.inRange(hsv_image, lower_green, upper_green)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
     mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_OPEN, kernel)
-
-    print("╔════════════╤══════════════╗")
-    print("║ Tick Label │ Y-axis Value ║")
-    print("╟────────────┼──────────────╢")
 
     found_flags = []
     found_ys = []
@@ -1499,7 +1494,6 @@ def scan_green_balls_by_x_ticks(hsv_image, mask_output_img, tick_labels, mapped_
             else:
                 y_label = interpolate_y_label(y + 5, mapped_tick_labels, y_green_label)
                 cv2.circle(mask_output_img, (tx, y), 1, (255, 255, 0), 3)
-            print(f"║ {label:<10} │ {y_label:<12} ║")
             last_y_label = y_label
             result_y_label = y_label
             green_points.append({
@@ -1508,17 +1502,14 @@ def scan_green_balls_by_x_ticks(hsv_image, mask_output_img, tick_labels, mapped_
             })
         else:
             if last_y_label is not None and i < last_green_idx:
-                print(f"║ {label:<10} │ {last_y_label:<12} ║")
                 result_y_label = last_y_label
                 green_points.append({
                     'x_label': label,
                     'y_value': y_label
                 })
             else:
-                print(f"║ {label:<10} │ {'-':<12} ║")
                 result_y_label = None
 
-    print("╚════════════╧══════════════╝")
     return green_points
 
 
@@ -1724,3 +1715,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    print("DONE")

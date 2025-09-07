@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 from scipy.signal import find_peaks
 import pytesseract
 import easyocr
@@ -51,11 +52,13 @@ def find_x_axis(lines, img_width):
             if angle < 10 or angle > 170:
                 if min_length < length < max_length:
                     horizontal.append((length, (x1, y1, x2, y2)))
+
         if not horizontal:
             return x_axis
 
         horizontal = sorted(horizontal, reverse=True)
         x_axis = horizontal[0][1]
+
     return x_axis
 
 
@@ -72,8 +75,8 @@ def find_y_axis(lines, x_axis):
 
             if 85 < angle < 95:
                 vertical.append((length, (x1, y1, x2, y2)))
-            vertical = sorted(vertical, reverse=True)
 
+            vertical = sorted(vertical, reverse=True)
             vertical_left = []
             if len(vertical) > 0:
                 x_axis_left = x_axis[0]
@@ -82,12 +85,14 @@ def find_y_axis(lines, x_axis):
                     if max(x1, x2) < x_axis_left + 10:
                         if max(y1, y2) < y_x_axis + 5:
                             vertical_left.append((length, (x1, y1, x2, y2)))
+
             if vertical_left:
                 y_axis = max(vertical_left, key=lambda t: t[0])[1]
+
     return y_axis
 
 
-def detect_axes_with_fallback(hsv_image, cropped_image, filename):
+def detect_axes_with_fallback(hsv_image, cropped_image):
     threshold_candidates = [
         (np.array([0, 0, 150]), np.array([180, 50, 255])),
         (np.array([0, 0, 200]), np.array([180, 50, 255])),
@@ -100,8 +105,6 @@ def detect_axes_with_fallback(hsv_image, cropped_image, filename):
 
     for lower_white, upper_white in threshold_candidates:
         mask_white_image = cv2.inRange(hsv_image, lower_white, upper_white)
-
-
         kernel_line = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         enhanced_mask_white_image = cv2.dilate(mask_white_image, kernel_line, iterations=1)
         enhanced_mask_white_image = cv2.morphologyEx(enhanced_mask_white_image, cv2.MORPH_CLOSE, kernel_line)
@@ -119,9 +122,6 @@ def detect_axes_with_fallback(hsv_image, cropped_image, filename):
             x_axis = find_x_axis(enhanced_lines, cropped_image.shape[1])
         if x_axis is None:
             continue
-        img = cropped_image.copy()
-        cv2.line(img, (x_axis[0], x_axis[1]), (x_axis[2], x_axis[3]), (0, 0, 255), 5)
-        cv2.imwrite(f"debug_axis/axis_test_{lower_white}_{upper_white}.png", img)
 
         y_axis = find_y_axis(base_lines, x_axis)
         if y_axis is None:
@@ -130,10 +130,6 @@ def detect_axes_with_fallback(hsv_image, cropped_image, filename):
             y_axis = find_y_axis(enhanced_lines_2, x_axis)
         if y_axis is None:
             continue
-
-        cv2.line(cropped_image, (x_axis[0], x_axis[1]), (x_axis[2], x_axis[3]), (0, 0, 255), 5)
-        cv2.line(cropped_image, (y_axis[0], y_axis[1]), (y_axis[2], y_axis[3]), (0, 255, 0), 5)
-        cv2.imwrite(f"debug_axis/axis_test.png", cropped_image)
 
         return mask_white_image, enhanced_mask_white_image, x_axis, y_axis
 
@@ -163,8 +159,7 @@ def find_x_minor_ticks(mask_image, x_axis_left, x_axis_top, x_axis_right, x_axis
     return sorted(minor_tick_coords, key=lambda t: t[0])
 
 
-def auto_add_x_minor_ticks(minor_tick_coords, x_axis_left, x_axis_top, x_axis_right, x_axis_bot
-                           , y_axis_left, y_axis_right):
+def auto_add_x_minor_ticks(minor_tick_coords, x_axis_left, x_axis_top, x_axis_right, x_axis_bot):
     if len(minor_tick_coords) >= 2:
         steps = [minor_tick_coords[i + 1][0] - minor_tick_coords[i][0] for i in range(len(minor_tick_coords) - 1)]
         avg_step = int(np.median(steps))
@@ -215,22 +210,19 @@ def ocr_month_with_easyocr(reader, image):
 
 
 def is_year_x_label_valid_pair(labels):
-    try:
-        years = [int(lbl) for lbl in labels if lbl.isdigit()]
-        if len(years) < 2:
-            return False
-        num_pairs = len(years) // 2
-        if num_pairs == 0:
-            return False
-
-        first_diff = years[1] - years[0]
-        for i in range(1, num_pairs):
-            diff = years[2 * i + 1] - years[2 * i]
-            if diff != first_diff:
-                return False
-        return True
-    except Exception:
+    years = [int(lbl) for lbl in labels if lbl.isdigit()]
+    if len(years) < 2:
         return False
+    num_pairs = len(years) // 2
+    if num_pairs == 0:
+        return False
+
+    first_diff = years[1] - years[0]
+    for i in range(1, num_pairs):
+        diff = years[2 * i + 1] - years[2 * i]
+        if diff != first_diff:
+            return False
+    return True
 
 
 def is_year_x_label_valid_range(gaps):
@@ -246,7 +238,7 @@ def is_year_x_label_valid_range(gaps):
         return True
     if all((g != 1 if i % 2 == 0 else g == 1) for i, g in enumerate(gaps)):
         return True
-    if (gaps[0] == 2 and all((g == 4 if i % 2 == 1 else g == 1) for i, g in enumerate(gaps[1:], start=1))):
+    if gaps[0] == 2 and all((g == 4 if i % 2 == 1 else g == 1) for i, g in enumerate(gaps[1:], start=1)):
         return True
     return False
 
@@ -259,7 +251,6 @@ def year_label_gaps(labels):
 
 
 def detect_labels_on_x_axis_pytesseract(image, strip_parm, x_axis_left, x_axis_right, count_minor):
-    labels, label_x = [], []
     day = False
     for top, bot in strip_parm:
         label_strip = image[top:bot, min(x_axis_left+10, x_axis_right):max(x_axis_left, x_axis_right+10)]
@@ -280,8 +271,6 @@ def detect_labels_on_x_axis_pytesseract(image, strip_parm, x_axis_left, x_axis_r
                     labels_temp.append(label)
                     label_x_temp.append(center_x)
 
-        cv2.imwrite(f"debug_test/x_ocr_py_{bot}_{top}.png", label_strip)
-
         if labels_temp and not (is_year_x_label_valid_range(year_label_gaps(labels_temp))):
             continue
         if 4 <= len(labels_temp) < (count_minor // 5) - 2:
@@ -291,11 +280,11 @@ def detect_labels_on_x_axis_pytesseract(image, strip_parm, x_axis_left, x_axis_r
             continue
         if labels_temp:
             return labels_temp, label_x_temp, day, (top, bot)
+
     return [], [], day, None
 
 
 def detect_labels_on_x_axis_easyocr(image, strip_parm, x_axis_left, x_axis_right, reader, count_minor):
-    labels, label_x = [], []
     day = False
     padding = [10, 20, 0, 25]
     for pad in padding:
@@ -304,6 +293,7 @@ def detect_labels_on_x_axis_easyocr(image, strip_parm, x_axis_left, x_axis_right
             label_strip = image[top:bot, min(x_axis_left-pad, x_axis_right):max(x_axis_left, x_axis_right+pad)]
             easy_labels = ocr_with_easyocr(reader, label_strip)
             easy_label_vals, easy_label_x = zip(*easy_labels) if easy_labels else ([], [])
+
             if easy_labels and not (is_year_x_label_valid_range(year_label_gaps(list(easy_label_vals)))):
                 continue
             if easy_labels and any(len(label) == 2 for label in easy_label_vals):
@@ -316,6 +306,7 @@ def detect_labels_on_x_axis_easyocr(image, strip_parm, x_axis_left, x_axis_right
                     return list(easy_label_vals), list(easy_label_x), day, (top, bot)
                 else:
                     before_label = easy_label_vals
+
     return [], [], day, None
 
 
@@ -323,63 +314,75 @@ def detect_labels_on_x_axis(image, strip_parm, x_axis_left, x_axis_right, reader
     labels, label_x, day, rng = detect_labels_on_x_axis_pytesseract(
         image, strip_parm, x_axis_left, x_axis_right, count_minor)
     easy_labels, easy_label_x, easy_day, easy_rng = None, None, None, None
+
     if len(labels) <= 3:
         easy_labels, easy_label_x, easy_day, easy_rng = detect_labels_on_x_axis_easyocr(
             image, strip_parm, x_axis_left, x_axis_right, reader, count_minor)
         if len(labels) < len(easy_labels):
             labels, label_x, day, rng = easy_labels, easy_label_x, easy_day, easy_rng
+
     return labels, label_x, day, rng
 
 
 def detect_month_labels_on_x_axis_pytesseract(image, strip_parm, x_axis_left, x_axis_right):
     months, months_x = [], []
+
     for top, bot in strip_parm:
         label_strip = image[top:bot, min(x_axis_left, x_axis_right):max(x_axis_left, x_axis_right)]
         label_strip_gray = cv2.cvtColor(label_strip, cv2.COLOR_BGR2GRAY)
         ocr_result = ocr_with_pytesseract(label_strip_gray)
+
         for i, text in enumerate(ocr_result['text']):
             text_clean = text.strip().upper()
+
             if text_clean in MONTH_ABBR and int(ocr_result['conf'][i]) > 70:
                 left = ocr_result['left'][i] - 10
                 width = ocr_result['width'][i] + 10
                 center_x = left + width // 2
-
                 already = False
+
                 for m, x in zip(months, months_x):
                     if m == text_clean and abs(x - center_x) < 15:
                         already = True
                         break
+
                 if not already:
                     months.append(text_clean)
                     months_x.append(center_x)
+
     return months, months_x
 
 
 def detect_month_labels_on_x_axis_easyocr(image, strip_parm, x_axis_left, x_axis_right, reader):
     months, months_x = [], []
+
     for top, bot in strip_parm:
         label_strip = image[top:bot, min(x_axis_left, x_axis_right):max(x_axis_left, x_axis_right)]
         easy_labels = ocr_month_with_easyocr(reader, label_strip)
+
         for month, cx in easy_labels:
             already = False
+
             for m, x in zip(months, months_x):
                 if m == month and abs(x - cx) < 15:
                     already = True
                     break
+
             if not already:
                 months.append(month)
                 months_x.append(cx)
+
     return months, months_x
 
 
 def detect_month_labels_on_x_axis(image, strip_parm, x_axis_left, x_axis_right, reader):
-    # Try pytesseract first
     months, months_x = detect_month_labels_on_x_axis_pytesseract(
         image, strip_parm, x_axis_left, x_axis_right)
+
     if not months:
-        # fallback to EasyOCR
         months, months_x = detect_month_labels_on_x_axis_easyocr(
             image, strip_parm, x_axis_left, x_axis_right, reader)
+
     return months, months_x
 
 
@@ -403,12 +406,15 @@ def auto_fill_missing_months(month_labels, months_x):
         curr_x = sorted_x[i]
         curr_idx = MONTH_ABBR.index(curr_label)
         num_missing = (curr_idx - prev_idx - 1) % 12
+
         if num_missing > 0:
             step = (curr_x - prev_x) / (num_missing + 1)
+
             for j in range(num_missing):
                 missing_idx = (prev_idx + j + 1) % 12
                 filled_labels.append(MONTH_ABBR[missing_idx])
                 filled_x.append(int(prev_x + step * (j + 1)))
+
         filled_labels.append(curr_label)
         filled_x.append(curr_x)
         prev_idx = curr_idx
@@ -421,11 +427,14 @@ def auto_fill_missing_months(month_labels, months_x):
 def count_consecutive_pairs(years):
     if not years:
         return 0
+
     years = sorted([int(y) for y in years])
     count = 0
+
     for i in range(1, len(years)):
         if years[i] == years[i - 1] + 1:
             count += 1
+
     return count
 
 
@@ -444,15 +453,11 @@ def find_x_major_ticks(image, strip_heights_parm, x_axis_left, x_axis_right, x_a
             y_base_major = (x_axis_top + x_axis_bot) / 2
             y_base_major = int(y_base_major)
             y_strip_top_major = y_base_major + y_offset
-
-
             y_strip_bot_major = y_strip_top_major + strip_height_major
             strip_img = image[
                         max(y_strip_top_major, 0):min(y_strip_bot_major, image.shape[0]),
                         max(0, min(x_axis_left, x_axis_right) - pad_left):min(image.shape[1], max(x_axis_left,  x_axis_right) + pad_right)
                         ]
-            cv2.imwrite(f"debug_test/axis_{strip_height_major}.png", strip_img)
-            cv2.imwrite(f"debug_test/axis_{strip_height_major}_i.png", image)
             col_proj = np.sum(strip_img, axis=0)
             col_proj = (col_proj - col_proj.min()) / (col_proj.max() - col_proj.min() + 1e-6)
             peaks_major, _ = find_peaks(col_proj, height=0.4, distance=25)
@@ -486,6 +491,7 @@ def find_x_major_ticks(image, strip_heights_parm, x_axis_left, x_axis_right, x_a
                 continue
 
             return sorted(detected_major_ticks_x), y_strip_bot_major
+
     return []
 
 
@@ -932,12 +938,6 @@ def map_labels_to_minor_ticks_range_months(mapping, tick_coords_sorted, y_strip,
         label = f"{year}.{month_in_year:02d}"
         label_results.append({'tick_pos': (tx, y_strip), 'label': label, 'is_quarter': False})
 
-    # # Optional: วาดลงรูปสำหรับ debug
-    # if output is not None:
-    #     for result in label_results:
-    #         cv2.putText(output, result['label'], (result['tick_pos'][0] - 10, y_strip - 12),
-    #                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 200, 255), 1)
-
     return label_results
 
 
@@ -971,10 +971,6 @@ def map_labels_to_minor_ticks_range_day(mapping, tick_coords_sorted, y_strip, mo
         label_year, label_month_idx = gen_months[month_group]
         label = f"{label_year}.{(label_month_idx + 1):02d}"
         label_results.append({'tick_pos': (tx, y_strip), 'label': label, 'is_quarter': False})
-
-        # if output is not None:
-        #     cv2.putText(output, label, (tx - 15, y_strip - 10),
-        #                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 50), 1)
 
     return label_results
 
@@ -1078,7 +1074,6 @@ def ocr_y_white_label(y_axis_left, y_axis_right, y_axis_top, y_axis_bot, img_cro
                       max(0, min(y_axis_top, y_axis_bot) - pad_top):min(img_cropped.shape[0], max(y_axis_top, y_axis_bot) + pad_bottom),
                       max(0, x_left):min(img_cropped.shape[1], x_right)
                       ]
-            cv2.imwrite(f"debug_test/ocr_y_{attempt_idx}.png", ocr_roi)
             ocr_result_y = pytesseract.image_to_data(
                 ocr_roi,
                 output_type=pytesseract.Output.DICT,
@@ -1198,8 +1193,6 @@ def ocr_y_green_label(img_cropped, best_line_y, y_axis_labels):
                 abs_x = strip_left + x
                 abs_y = y1_y + y
                 roi = img_cropped[abs_y:abs_y + h, abs_x:abs_x + w]
-                # roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                cv2.imwrite(f"debug_green_label/green_label_{attempt_idx}.png", roi)
                 text = pytesseract.image_to_string(roi, config='--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.MBkK').strip()
 
                 if text == "." or text == "-":
@@ -1244,7 +1237,7 @@ def ocr_y_green_label(img_cropped, best_line_y, y_axis_labels):
         combined = [item for item in combined if item['label'].strip() != '']
         combined = sorted(combined, key=lambda x: x['y'])
 
-        if len(combined) > 1 and combined[0]["label"] == "N/A":
+        if len(combined) > 1 and combined[0]["label"] == "0":
             green_result_before = green_results
         parsed_values = [parse_y_label_value(l['label']) for l in combined]
         if None in parsed_values:
@@ -1318,7 +1311,7 @@ def auto_fill_missing_tick_label(mapped_tick_labels):
                     tick['label'] = label_str
         else:
             for tick in mapped_tick_labels:
-                tick['label'] = "N/A"
+                tick['label'] = "0"
         return mapped_tick_labels
 
     anchor_ticks_sorted = sorted(anchor_ticks, key=lambda x: x[1], reverse=True)
@@ -1366,7 +1359,7 @@ def interpolate_y_label(target_y, mapped_tick_labels, green_labels=None):
     if not valid_ticks or len(valid_ticks) == 1:
         for tick in mapped_tick_labels:
             return tick['label']
-        return "N/A"
+        return "0"
 
     if green_labels is not None and len(green_labels) > 0:
         for green in green_labels:
@@ -1386,7 +1379,7 @@ def interpolate_y_label(target_y, mapped_tick_labels, green_labels=None):
     dv = values[0] - values[1]
 
     if dy == 0:
-        return "N/A"
+        return "0"
 
     slope = dv / dy
     delta_y = target_y - base_y
@@ -1434,6 +1427,7 @@ def scan_green_balls_by_x_ticks(hsv_image, mask_output_img, tick_labels, mapped_
 
     found_flags = []
     found_ys = []
+    green_points = []
 
     sorted_ticks = sorted(tick_labels, key=lambda t: t['tick_pos'][0])
     for tick in sorted_ticks:
@@ -1508,37 +1502,37 @@ def scan_green_balls_by_x_ticks(hsv_image, mask_output_img, tick_labels, mapped_
             print(f"║ {label:<10} │ {y_label:<12} ║")
             last_y_label = y_label
             result_y_label = y_label
+            green_points.append({
+                'x_label': label,
+                'y_value': y_label
+            })
         else:
             if last_y_label is not None and i < last_green_idx:
                 print(f"║ {label:<10} │ {last_y_label:<12} ║")
                 result_y_label = last_y_label
+                green_points.append({
+                    'x_label': label,
+                    'y_value': y_label
+                })
             else:
                 print(f"║ {label:<10} │ {'-':<12} ║")
                 result_y_label = None
 
     print("╚════════════╧══════════════╝")
+    return green_points
 
 
 # ------------------- Main -------------------
 def main():
     start_time = time.time()
     reader = easyocr.Reader(['en'])
-    input_dir = "pdf_images_VanEck"
-    output_dir = "image_final_test_VanEck"
+    input_dir = "pdf_graph_output"
+    output_dir = "image_final"
     os.makedirs(output_dir, exist_ok=True)
     save = 0
+    results = []
+    print("Start")
     for i in range(2, 348):
-        #if i == 173:
-        if i in [27, 37, 44, 102, 141, 172, 180]:
-            continue
-        # if i in [46, 47, 48, 74]:
-        #     continue
-        # if i in [32, 33, 37, 214]:
-        #     continue
-        # if i in [23, 71]:
-        #     continue
-        # if i in [89, 95, 99]:
-        #     continue
         filename = f"cropped_page_{i}.png"
         img_path = os.path.join(input_dir, filename)
         img = cv2.imread(img_path)
@@ -1548,9 +1542,10 @@ def main():
         cropped_image = crop_image(img, 25, 25, 50, 50)
         hsv_image = convert_bgr_to_hsv(cropped_image)
 
-        mask_white_image, enhanced_mask_white_image, x_axis, y_axis = detect_axes_with_fallback(hsv_image, cropped_image, filename)
+        mask_white_image, enhanced_mask_white_image, x_axis, y_axis = detect_axes_with_fallback(hsv_image, cropped_image)
 
         if x_axis is None or y_axis is None:
+            print("NONE")
             continue
 
         x_axis_left, x_axis_top, x_axis_right, x_axis_bot = x_axis
@@ -1559,12 +1554,9 @@ def main():
         cv2.line(cropped_image, (x_axis[0], x_axis[1]), (x_axis[2], x_axis[3]), (0, 0, 255), 5)
         cv2.line(cropped_image, (y_axis[0], y_axis[1]), (y_axis[2], y_axis[3]), (0, 255, 0), 5)
 
-        cv2.imwrite(f"debug_axis/axis_{i}.png", cropped_image)
-
         # ===== X Minor ticks =====
         minor_tick_coords = find_x_minor_ticks(mask_white_image, x_axis_left, x_axis_top, x_axis_right, x_axis_bot)
-        minor_tick_coords = auto_add_x_minor_ticks(minor_tick_coords, x_axis_left, x_axis_top, x_axis_right, x_axis_bot,
-                                                   y_axis_left, y_axis_right)
+        minor_tick_coords = auto_add_x_minor_ticks(minor_tick_coords, x_axis_left, x_axis_top, x_axis_right, x_axis_bot)
 
         if minor_tick_coords is None:
             continue
@@ -1586,8 +1578,6 @@ def main():
         for l, x in zip(labels, label_x):
             cv2.putText(cropped_image, l, (x + 180, x_axis_bot + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 50, 255),2)
 
-        cv2.imwrite(f"debug_x_label/x_label_{i}.png", cropped_image)
-
         # ===== X month =====
         if len(labels) <= 4:
             months, months_x = detect_month_labels_on_x_axis(cropped_image, strip_ocr_parm, x_axis_left, x_axis_right,
@@ -1599,8 +1589,6 @@ def main():
                 cv2.putText(cropped_image, m, (x + 150, x_axis_bot + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 50, 255),2)
         else:
             months = []
-
-        # cv2.imwrite(f"debug_month/month_{i}.png", cropped_image)
 
         # ===== Major ticks =====
         strip_x_major_parm = [1, 3, 5, 7, 8, 9, 11, 12, 13, 15, 17, 19, 21, 23, 25, 27, 100]
@@ -1651,8 +1639,6 @@ def main():
         for tx in major_tick_coords:
             cv2.line(cropped_image, (tx, y_x_major_coord - 10), (tx, y_x_major_coord + 10), (0, 250, 255), 3)
 
-        cv2.imwrite(f"debug_x_major/x_major_{i}.png", cropped_image)
-
         mapping = map_labels_to_x_major_ticks(label_x, labels, major_tick_coords, x_axis_left, x_axis_right)
 
         tick_labels = []
@@ -1684,11 +1670,35 @@ def main():
         if len(y_green_labels) == 1:
             mapped_tick_labels = y_green_labels
 
-        scan_green_balls_by_x_ticks(hsv_image, cropped_image, tick_labels, mapped_tick_labels, x_axis, y_axis,
+        green_points = scan_green_balls_by_x_ticks(hsv_image, cropped_image, tick_labels, mapped_tick_labels, x_axis, y_axis,
                                     y_green_labels, day)
 
         cv2.line(cropped_image, (x_axis[0], x_axis[1]), (x_axis[2], x_axis[3]), (0, 0, 255), 5)
         cv2.line(cropped_image, (y_axis[0], y_axis[1]), (y_axis[2], y_axis[3]), (0, 255, 0), 5)
+
+        results.append({
+            'filename': filename,
+            'green_points': green_points
+        })
+
+        all_rows = []
+        for item in results:
+            fname = item['filename']
+            for pt in item['green_points']:
+                row = {
+                    'filename': fname,
+                    'x_label': pt.get('x_label', ''),
+                    'y_value': pt.get('y_value', '')
+                }
+                all_rows.append(row)
+
+        df = pd.DataFrame(all_rows)
+        csv_dir = "csv"
+        os.makedirs(csv_dir, exist_ok=True)
+        output_csv_path = os.path.join(csv_dir, "green_points.csv")
+
+        df.to_csv(output_csv_path, index=False, encoding='utf-8-sig')
+        print(f"Saved Graph CSV : {output_csv_path}")
 
         for (tx, ty) in minor_tick_coords:
             cv2.line(cropped_image, (tx, ty - 10), (tx, ty + 10), (255, 100, 0), 2)
@@ -1705,7 +1715,7 @@ def main():
         plt.savefig(out_path)
         plt.close()
         print(f"Saved: {out_path}")
-        save+=1
+        save += 1
         end_time = time.time()
         elapsed = end_time - start_time
         print(f"Total Time {elapsed:.2f} sec")
